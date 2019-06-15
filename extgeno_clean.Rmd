@@ -1,0 +1,178 @@
+---
+title: "extgeno_clean"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Summary of code used to analyze microbial communities from 10 Evolve & Resequence experiments in Drosophila melanogaster. Metagenomes were called used kraken and bracken tools. Here, I analyze communities for Shannon Diversity (H`) and show how including vertically transmitted Wolbachia influences the conclusions about diversity. 
+
+```{r}
+require(ggplot2)
+require(tidyverse)
+
+#setdir
+setwd(dir = "/Volumes/GoogleDrive/My Drive/microrapidevo")
+
+```
+
+For each E&R dataset, loop through each metagenome file to quantify diversity using Shannon H index. Example code for one experiment. For supplemental figure, used line 45 to include/exclude wolbachia 
+```{r}
+#directory for each E&R dataset. Change for each study  
+setwd(dir="huang/fam_abund/")
+
+#appr function
+shanH.txt<- function(x) {
+      pIx<- x$new_est_reads/sum(x$new_est_reads)
+      -sum(pIx*log(pIx))
+}
+
+#get file names
+file.names<- Sys.glob("*abund.txt")
+
+#define out file now before the loop
+out.file<- ""
+
+for(i in 1:length(file.names)){
+  #read in file
+  temp.file <- read.table(file.names[i], header=TRUE, sep="\t")
+  
+  #cleanup file for wolbachia
+  #temp.file<- filter(temp.file, name!="Anaplasmataceae")
+  
+  #cleanup file for low abundance
+  temp.file<- filter(temp.file, new_est_reads>100)
+  
+  #cleanup to remove viruses from diversity analysis after filtering for other things 
+  temp.file<-   temp.file %>% filter(!str_detect(name, "viridae$"))
+  
+  #cal diversity 
+  temp.div<- shanH.txt(temp.file)
+  
+  #clean up diversity estimates
+  temp.rows<- c(file.names[i], temp.div)
+ 
+  #output data 
+  out.file<- rbind(out.file, temp.rows)
+  
+  }
+
+#cleanup file
+out.file<- out.file[-c(1), ]
+
+#change name depending on what was included and by each study. 
+write.table(out.file, "huang_nomap_nolowabundviruswolb_div.csv", sep=",")
+
+#remove files to do everything again for each study 
+rm(list=ls())
+
+```
+
+all of the diversity data was organized into one master file. Code to make Figure 2
+looking at all of the studies to plot which microbial communities respond to selection
+```{r}
+#move to back to full directory for diversity analyses
+setwd(dir = "/Volumes/GoogleDrive/My Drive/microrapidevo")
+
+#total.div is file with Shannon H from all E&R experiments
+total.div<- read.table("extgeno-totaldiv-b.csv", sep=",", header=TRUE)
+
+
+total.div$pressure_f<- factor(total.div$pressure, levels = c('accelerated development time', 'delayed reproduction', 
+                                                             'increased lifespan', 'egg size',
+                                                             'desiccation resistance', 
+                                                             'fluctuating temperature',
+                                                             'salt and cadium resistance', 'starvation resistance', 
+                                                             'parasitoid resistance', 'viral resistance'))
+
+#plot for Fig. 2A
+plot.total.div<-
+ggplot(data=total.div, aes(x=control.evolved, y=H)) + geom_boxplot() +
+       geom_point(aes(color=pressure_f)) + 
+       scale_color_brewer(palette="Spectral") + 
+       facet_wrap(~pressure_f, ncol=2, scales = "free") + 
+       theme_bw() + 
+       theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + 
+  xlab("") + 
+  ylab("Bacterial diversity (family)") + 
+  theme(legend.position="none")
+
+ggsave(plot.total.div, file="totaldiv222.pdf", height=8, width=6)
+
+#comparing if change in diversity is related to length of selection
+#calculations made outside of R
+deltah.div<- read.table("extgeno-deltah.csv", sep=",", header=TRUE)
+
+#define factors
+deltah.div$pressure_f<- factor(deltah.div$pressure, levels = c('accelerated development time', 'delayed reproduction', 
+                                                             'increased lifespan', 'egg size',
+                                                             'desiccation resistance', 
+                                                             'fluctuating temperature',
+                                                             'salt and cadium resistance', 'starvation resistance', 
+                                                             'parasitoid resistance', 'viral resistance'))
+
+#make absolute change
+deltah.div$absdelta<- abs(deltah.div$delta.H)
+#do log length 
+deltah.div$log10.length<- log10(deltah.div$length.select)
+
+#plot Fig 1B
+plot.deltah<-
+  ggplot(deltah.div, aes(x=log10.length, y=absdelta)) + 
+      geom_point(aes(colour=pressure_f)) + 
+      geom_smooth(method="lm") + 
+      theme_classic() + 
+      xlab("generations of selection (log10)") + 
+      ylab("absolute change in diversity") + 
+      scale_color_brewer(palette="Spectral") + 
+      theme(legend.position = "right")
+
+ggsave(plot.deltah, file="deltahdiv.pdf", height=4, width=4)
+
+#length of selection predicts change in diversity, but weak linear relationship and lots of noise 
+summary(lm(data=deltah.div, absdelta~log10.length))
+
+#finding r
+cor(deltah.div$log10.length, deltah.div$absdelta)
+
+#filter for just significant 
+deltah.div.signif<- filter(deltah.div, stat.signif)
+
+#check stats. only weakly significant 
+summary(lm(data=deltah.div.signif, absdelta~log10.length))
+
+#effects of wolbachia on community diversity, suggesting complex interactions between wolbachia and microbiome
+total.wolb<- read.table("totaldiv_nowolb.csv", sep=",", header=TRUE)
+
+#reorder H.ctreat to show differences in response to wolbachia
+total.wolb$H.ctreat_f<- factor(total.wolb$H.ctreat, levels=c('control', 'selected', 
+                                                             'control - no wolbachia', 'selected - no wolbachia'))
+
+#filter only for the 4 that illustrate when excluding Wolbachia changes patterns in diversity 
+total.sub<- filter(total.wolb, pressure == "accelerated development" | 
+                               pressure == "fluctuating temperature" |
+                               pressure == "starvation resistance" | pressure == "viral resistance")
+
+#palette to match the colors with the whole data plot (Fig. 2)
+subwolb.pal<- c("#9E0142", "#E6F598", "#66C2A5", "#5E4FA2")
+
+#plot for Supplemental Figure 1. 
+plot.total.sub<-
+  ggplot(total.sub, aes(x=control.selected, y=H)) + 
+      geom_boxplot() + 
+      geom_point(aes(color=pressure)) + 
+      scale_color_manual(values=subwolb.pal) + 
+      facet_wrap(pressure~H.cond, scales="free", ncol=4) + 
+      xlab("") + 
+      ylab("Bacterial diversity (family)") + 
+      theme_bw() + 
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + 
+      theme(legend.position="none")
+
+ggsave(plot.total.sub, file="totalwolbcomp.pdf", height=6, width=8)
+
+```
+
+
+
+
